@@ -80,6 +80,63 @@ func TestLexer_Basic(t *testing.T) {
 	}
 }
 
+func TestCommentSkipping(t *testing.T) {
+	input := `// This is a comment
+resource "test" { # This is also a comment
+	// Another comment
+	attr1 = "value1" // Comment after a value
+	# Comment on its own line
+	attr2 = 123
+}`
+
+	scanner := newCustomScanner(strings.NewReader(input))
+	
+	// Expected tokens after comments and whitespace are skipped
+	expectedTokens := []struct {
+		Type    TokenType
+		Literal string
+	}{
+		{IDENT, "resource"},
+		{STRING, "test"},
+		{LBRACE, "{"},
+		{IDENT, "attr1"},
+		{ASSIGN, "="},
+		{STRING, "value1"},
+		{IDENT, "attr2"},
+		{ASSIGN, "="},
+		{NUMBER, "123"},
+		{RBRACE, "}"},
+		{EOF, ""},
+	}
+	
+	// Collect tokens directly from the scanner
+	var tokens []Token
+	for i := 0; i < len(expectedTokens); i++ {
+		token := scanner.scanToken()
+		tokens = append(tokens, token)
+		
+		t.Logf("Token %d: Type=%v, Literal='%s', Line=%d, Col=%d", 
+			i, token.Type, token.Literal, token.Line, token.Column)
+			
+		if token.Type != expectedTokens[i].Type {
+			t.Errorf("Token %d: expected type %v, got %v", i, expectedTokens[i].Type, token.Type)
+		}
+		
+		if token.Literal != expectedTokens[i].Literal {
+			t.Errorf("Token %d: expected literal '%s', got '%s'", i, expectedTokens[i].Literal, token.Literal)
+		}
+		
+		if token.Type == EOF {
+			break
+		}
+	}
+	
+	// Verify we got all expected tokens and no more
+	if len(tokens) != len(expectedTokens) {
+		t.Errorf("Expected %d tokens, got %d", len(expectedTokens), len(tokens))
+	}
+}
+
 func TestLexer_AllTokenTypes(t *testing.T) {
 	t.Skip("Skipping token type test")
 	input := `

@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"io"
 	"strings"
-	"text/scanner"
 )
 
 // TokenType identifies the type of lexical tokens
@@ -42,18 +41,243 @@ type Token struct {
 
 // Lexer tokenizes input text
 type Lexer struct {
-	scanner scanner.Scanner
+	scanner func() Token
 	curr    Token
 	next    Token
 }
 
+// Custom scanner to properly handle comments
+type customScanner struct {
+	reader    io.Reader
+	buffer    []byte
+	position  int
+	readPos   int
+	ch        byte
+	line      int
+	column    int
+	lastToken Token
+}
+
+// Initialize a new custom scanner
+func newCustomScanner(r io.Reader) *customScanner {
+	cs := &customScanner{
+		reader: r,
+		line:   1,
+		column: 0,
+	}
+	// Read the first character
+	cs.readChar()
+	return cs
+}
+
+// Read the next character from the input
+func (cs *customScanner) readChar() {
+	if cs.readPos >= len(cs.buffer) {
+		// Read more input if needed
+		buf := make([]byte, 1024)
+		n, err := cs.reader.Read(buf)
+		if err != nil || n == 0 {
+			cs.ch = 0 // EOF
+		} else {
+			cs.buffer = buf[:n]
+			cs.position = 0
+			cs.readPos = 1
+			cs.ch = cs.buffer[0]
+		}
+	} else {
+		cs.ch = cs.buffer[cs.readPos]
+		cs.position = cs.readPos
+		cs.readPos++
+	}
+
+	// Update line and column
+	if cs.ch == '\n' {
+		cs.line++
+		cs.column = 0
+	} else {
+		cs.column++
+	}
+}
+
+// Peek at the next character
+func (cs *customScanner) peekChar() byte {
+	if cs.readPos >= len(cs.buffer) {
+		return 0
+	}
+	return cs.buffer[cs.readPos]
+}
+
+// Skip whitespace
+func (cs *customScanner) skipWhitespace() {
+	for cs.ch == ' ' || cs.ch == '\t' || cs.ch == '\n' || cs.ch == '\r' {
+		cs.readChar()
+	}
+}
+
+// Skip comments (both // and #)
+func (cs *customScanner) skipComments() bool {
+	if cs.ch == '/' && cs.peekChar() == '/' {
+		// Skip // comment
+		for cs.ch != '\n' && cs.ch != 0 {
+			cs.readChar()
+		}
+		if cs.ch == '\n' {
+			cs.readChar() // Skip the newline
+		}
+		return true
+	} else if cs.ch == '#' {
+		// Skip # comment
+		for cs.ch != '\n' && cs.ch != 0 {
+			cs.readChar()
+		}
+		if cs.ch == '\n' {
+			cs.readChar() // Skip the newline
+		}
+		return true
+	}
+	return false
+}
+
+// Read an identifier
+func (cs *customScanner) readIdentifier() string {
+	startPosition := cs.position
+	for isLetter(cs.ch) || isDigit(cs.ch) || cs.ch == '_' {
+		cs.readChar()
+	}
+	return string(cs.buffer[startPosition:cs.position])
+}
+
+// Read a number
+func (cs *customScanner) readNumber() string {
+	startPosition := cs.position
+	for isDigit(cs.ch) || cs.ch == '.' {
+		cs.readChar()
+	}
+	return string(cs.buffer[startPosition:cs.position])
+}
+
+// Read a string
+func (cs *customScanner) readString() string {
+	// Skip the opening quote
+	cs.readChar()
+	startPosition := cs.position
+
+	for cs.ch != '"' && cs.ch != 0 {
+		cs.readChar()
+	}
+
+	// Capture the string without the quotes
+	result := string(cs.buffer[startPosition:cs.position])
+
+	// Skip the closing quote
+	if cs.ch == '"' {
+		cs.readChar()
+	}
+
+	return result
+}
+
+// Scan the next token
+func (cs *customScanner) scanToken() Token {
+	// Skip whitespace and comments
+	cs.skipWhitespace()
+	for cs.skipComments() {
+		cs.skipWhitespace()
+	}
+
+	var tok Token
+	tok.Line = cs.line
+	tok.Column = cs.column
+
+	switch cs.ch {
+	case 0:
+		tok.Type = EOF
+		tok.Literal = ""
+	case '{':
+		tok.Type = LBRACE
+		tok.Literal = "{"
+		cs.readChar()
+	case '}':
+		tok.Type = RBRACE
+		tok.Literal = "}"
+		cs.readChar()
+	case '(':
+		tok.Type = LPAREN
+		tok.Literal = "("
+		cs.readChar()
+	case ')':
+		tok.Type = RPAREN
+		tok.Literal = ")"
+		cs.readChar()
+	case '[':
+		tok.Type = LBRACKET
+		tok.Literal = "["
+		cs.readChar()
+	case ']':
+		tok.Type = RBRACKET
+		tok.Literal = "]"
+		cs.readChar()
+	case '=':
+		tok.Type = ASSIGN
+		tok.Literal = "="
+		cs.readChar()
+	case ',':
+		tok.Type = COMMA
+		tok.Literal = ","
+		cs.readChar()
+	case '"':
+		tok.Type = STRING
+		tok.Literal = cs.readString()
+	default:
+		if isLetter(cs.ch) {
+			tok.Literal = cs.readIdentifier()
+			// Check for keywords
+			switch strings.ToLower(tok.Literal) {
+			case "when":
+				tok.Type = WHEN
+			case "depends_on":
+				tok.Type = DEPENDS_ON
+			case "include":
+				tok.Type = INCLUDE
+			case "include_platform":
+				tok.Type = INCLUDE_PLATFORM
+			case "variable":
+				tok.Type = VARIABLE
+			case "template":
+				tok.Type = TEMPLATE
+			default:
+				tok.Type = IDENT
+			}
+		} else if isDigit(cs.ch) {
+			tok.Literal = cs.readNumber()
+			tok.Type = NUMBER
+		} else {
+			tok.Type = ILLEGAL
+			tok.Literal = string(cs.ch)
+			cs.readChar()
+		}
+	}
+
+	cs.lastToken = tok
+	return tok
+}
+
+// Helper function to check if a character is a letter
+func isLetter(ch byte) bool {
+	return 'a' <= ch && ch <= 'z' || 'A' <= ch && ch <= 'Z'
+}
+
+// Helper function to check if a character is a digit
+func isDigit(ch byte) bool {
+	return '0' <= ch && ch <= '9'
+}
+
 // NewLexer creates a new lexer from a reader
 func NewLexer(r io.Reader) *Lexer {
-	var s scanner.Scanner
-	s.Init(r)
-	s.Mode = scanner.ScanIdents | scanner.ScanStrings | scanner.ScanComments
-
-	l := &Lexer{scanner: s}
+	scanner := newCustomScanner(r)
+	l := &Lexer{
+		scanner: scanner.scanToken, // Store the scanToken function
+	}
 	l.next = l.scanToken() // Prime the first token
 	l.advance()            // Set curr and next
 	return l
@@ -77,65 +301,9 @@ func (l *Lexer) Peek() Token {
 	return l.next
 }
 
-// scanToken scans the next token
+// scanToken gets the next token from the scanner
 func (l *Lexer) scanToken() Token {
-	tok := l.scanner.Scan()
-	if tok == scanner.EOF {
-		return Token{Type: EOF, Literal: "", Line: l.scanner.Line, Column: l.scanner.Column}
-	}
-
-	literal := l.scanner.TokenText()
-	tokenType := ILLEGAL
-
-	// Determine token type
-	switch {
-	case tok == scanner.Ident:
-		tokenType = IDENT
-		// Check for keywords
-		switch strings.ToLower(literal) {
-		case "when":
-			tokenType = WHEN
-		case "depends_on":
-			tokenType = DEPENDS_ON
-		case "include":
-			tokenType = INCLUDE
-		case "include_platform":
-			tokenType = INCLUDE_PLATFORM
-		case "variable":
-			tokenType = VARIABLE
-		case "template":
-			tokenType = TEMPLATE
-		}
-	case tok == scanner.String:
-		tokenType = STRING
-		// Remove surrounding quotes
-		literal = literal[1 : len(literal)-1]
-	case tok == scanner.Int || tok == scanner.Float:
-		tokenType = NUMBER
-	case literal == "{":
-		tokenType = LBRACE
-	case literal == "}":
-		tokenType = RBRACE
-	case literal == "(":
-		tokenType = LPAREN
-	case literal == ")":
-		tokenType = RPAREN
-	case literal == "[":
-		tokenType = LBRACKET
-	case literal == "]":
-		tokenType = RBRACKET
-	case literal == "=":
-		tokenType = ASSIGN
-	case literal == ",":
-		tokenType = COMMA
-	}
-
-	return Token{
-		Type:    tokenType,
-		Literal: literal,
-		Line:    l.scanner.Line,
-		Column:  l.scanner.Column,
-	}
+	return l.scanner()
 }
 
 // Resource represents a parsed resource block
