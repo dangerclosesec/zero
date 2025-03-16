@@ -252,6 +252,10 @@ func (e *Engine) validateResources(ctx context.Context, graph map[string]*Resour
 			return fmt.Errorf("no provider for resource %s: %v", id, err)
 		}
 
+		if _, ok := node.Resource.Attributes["name"]; !ok {
+			node.Resource.Attributes["name"] = node.Resource.Name
+		}
+
 		if err := provider.Validate(ctx, node.Resource.Attributes); err != nil {
 			return fmt.Errorf("validation failed for resource %s: %v", id, err)
 		}

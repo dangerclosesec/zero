@@ -471,7 +471,7 @@ func (p *Parser) Parse() ([]Resource, error) {
 	}
 
 	if len(p.errors) > 0 {
-		return p.Resources, fmt.Errorf("parsing failed with %d errors", len(p.errors))
+		return p.Resources, fmt.Errorf("parsing failed with %d errors, %#v", len(p.errors), p.errors)
 	}
 
 	return p.Resources, nil
