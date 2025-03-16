@@ -230,23 +230,27 @@ func (cs *customScanner) scanToken() Token {
 		tok.Literal = cs.readString()
 	default:
 		if isLetter(cs.ch) {
+			// Read a complete identifier
 			tok.Literal = cs.readIdentifier()
-			// Check for keywords
-			switch strings.ToLower(tok.Literal) {
-			case "when":
-				tok.Type = WHEN
-			case "depends_on":
-				tok.Type = DEPENDS_ON
-			case "include":
-				tok.Type = INCLUDE
-			case "include_platform":
+			// Check immediately if this is "include_platform" before any general processing
+			if tok.Literal == "include_platform" {
 				tok.Type = INCLUDE_PLATFORM
-			case "variable":
-				tok.Type = VARIABLE
-			case "template":
-				tok.Type = TEMPLATE
-			default:
-				tok.Type = IDENT
+			} else {
+				// Check for other keywords
+				switch strings.ToLower(tok.Literal) {
+				case "when":
+					tok.Type = WHEN
+				case "depends_on":
+					tok.Type = DEPENDS_ON
+				case "include":
+					tok.Type = INCLUDE
+				case "variable":
+					tok.Type = VARIABLE
+				case "template":
+					tok.Type = TEMPLATE
+				default:
+					tok.Type = IDENT
+				}
 			}
 		} else if isDigit(cs.ch) {
 			tok.Literal = cs.readNumber()
@@ -346,6 +350,9 @@ func (p *Parser) Errors() []string {
 // Parse parses the entire configuration file
 func (p *Parser) Parse() ([]Resource, error) {
 	for p.lexer.Current().Type != EOF {
+		// Debug: Print current token info
+		// fmt.Printf("DEBUG: Current token: Type=%v, Literal='%s'\n", p.lexer.Current().Type, p.lexer.Current().Literal)
+
 		// Now we look for resource types, includes, or variables
 		if p.lexer.Current().Type == IDENT ||
 			p.lexer.Current().Type == INCLUDE ||
@@ -365,6 +372,87 @@ func (p *Parser) Parse() ([]Resource, error) {
 				resourceType = "template"
 			default:
 				resourceType = p.lexer.Current().Literal
+			}
+
+			// Debug: Print recognized resource type
+			// fmt.Printf("DEBUG: Recognized resource type: %s\n", resourceType)
+
+			// We encountered a standard resource type or keyword
+			// Check if we're currently at the start of the file, looking at 'include'
+			if p.lexer.Current().Type == INCLUDE {
+				// Look ahead to see what comes next
+				p.lexer.advance()
+
+				// If we see a '{' after 'include', it might be an include_platform block
+				if p.lexer.Current().Type == LBRACE {
+					// fmt.Printf("DEBUG: Detected include_platform structure\n")
+					// Create resource for include_platform
+					resource := Resource{
+						Type:       "include_platform",
+						Name:       "platform", // Default name
+						Attributes: make(map[string]interface{}),
+					}
+
+					// Parse the block
+					p.lexer.advance() // Skip '{'
+
+					// Process platform-specific paths
+					for p.lexer.Current().Type != RBRACE && p.lexer.Current().Type != EOF {
+						// Expect platform identifier
+						if p.lexer.Current().Type != IDENT {
+							p.ParseError("Expected platform identifier in include_platform block, got %s", p.lexer.Current().Literal)
+							p.skipToNextResource()
+							continue
+						}
+
+						platform := p.lexer.Current().Literal
+						p.lexer.advance()
+
+						// Expect '='
+						if p.lexer.Current().Type != ASSIGN {
+							p.ParseError("Expected '=' after platform name, got %s", p.lexer.Current().Literal)
+							p.skipToNextResource()
+							continue
+						}
+						p.lexer.advance()
+
+						// Expect string
+						if p.lexer.Current().Type != STRING {
+							p.ParseError("Expected string path for platform %s, got %s", platform, p.lexer.Current().Literal)
+							p.skipToNextResource()
+							continue
+						}
+
+						// Add to attributes
+						resource.Attributes[platform] = p.lexer.Current().Literal
+						p.lexer.advance()
+					}
+
+					// Skip closing '}'
+					if p.lexer.Current().Type == RBRACE {
+						p.lexer.advance()
+					}
+
+					// Add resource to resources
+					p.Resources = append(p.Resources, resource)
+					continue
+				} else {
+					// Not an include_platform, go back to 'include'
+					p.lexer.advance() // Skip token after include
+				}
+			}
+
+			// Special handling for include_platform keyword
+			if p.lexer.Current().Type == INCLUDE_PLATFORM {
+				// fmt.Printf("DEBUG: Handling include_platform keyword\n")
+				resource, err := p.parseIncludePlatformBlock()
+				if err != nil {
+					p.ParseError("Error parsing include_platform: %v", err)
+					p.skipToNextResource()
+				} else {
+					p.Resources = append(p.Resources, resource)
+				}
+				continue
 			}
 
 			p.lexer.advance()
@@ -387,6 +475,59 @@ func (p *Parser) Parse() ([]Resource, error) {
 	}
 
 	return p.Resources, nil
+}
+
+// parseIncludePlatformBlock parses an include_platform block with platform-specific paths
+// Format: include_platform { linux = "path", darwin = "path", windows = "path" }
+func (p *Parser) parseIncludePlatformBlock() (Resource, error) {
+	resource := Resource{
+		Type:       "include_platform",
+		Name:       "platform", // Using a default name for include_platform
+		Attributes: make(map[string]interface{}),
+	}
+
+	// Advance past 'include_platform' token
+	p.lexer.advance()
+
+	// Expect '{'
+	if p.lexer.Current().Type != LBRACE {
+		return resource, fmt.Errorf("expected '{' after include_platform, got %s", p.lexer.Current().Literal)
+	}
+	p.lexer.advance()
+
+	// Parse platform paths
+	for p.lexer.Current().Type != RBRACE && p.lexer.Current().Type != EOF {
+		// Expect platform identifier
+		if p.lexer.Current().Type != IDENT {
+			return resource, fmt.Errorf("expected platform identifier (linux, darwin, windows), got %s", p.lexer.Current().Literal)
+		}
+
+		platform := p.lexer.Current().Literal
+		p.lexer.advance()
+
+		// Expect '='
+		if p.lexer.Current().Type != ASSIGN {
+			return resource, fmt.Errorf("expected '=' after platform name, got %s", p.lexer.Current().Literal)
+		}
+		p.lexer.advance()
+
+		// Expect path string
+		if p.lexer.Current().Type != STRING {
+			return resource, fmt.Errorf("expected string path for platform %s, got %s", platform, p.lexer.Current().Literal)
+		}
+
+		// Store the platform path
+		resource.Attributes[platform] = p.lexer.Current().Literal
+		p.lexer.advance()
+	}
+
+	// Expect '}'
+	if p.lexer.Current().Type != RBRACE {
+		return resource, fmt.Errorf("expected '}' to close include_platform block, got %s", p.lexer.Current().Literal)
+	}
+	p.lexer.advance()
+
+	return resource, nil
 }
 
 // parseResourceBlock parses a resource block

@@ -601,3 +601,38 @@ resource "good" {
 		t.Errorf("Expected resource name 'good', got %s", res.Name)
 	}
 }
+
+func TestParser_IncludePlatform(t *testing.T) {
+	input := `include_platform {
+  linux = "linux/config.cfg"
+  darwin = "darwin/config.cfg"
+  windows = "windows/config.cfg"
+}`
+
+	parser := NewParser(strings.NewReader(input))
+	resources, err := parser.Parse()
+	
+	if err != nil {
+		t.Fatalf("Failed to parse include_platform: %v", err)
+	}
+	
+	if len(resources) != 1 {
+		t.Errorf("Expected 1 resource, got %d", len(resources))
+	}
+	
+	if resources[0].Type != "include_platform" {
+		t.Errorf("Expected resource type 'include_platform', got '%s'", resources[0].Type)
+	}
+	
+	if linux, ok := resources[0].Attributes["linux"].(string); !ok || linux != "linux/config.cfg" {
+		t.Errorf("Expected linux path to be 'linux/config.cfg', got '%v'", resources[0].Attributes["linux"])
+	}
+	
+	if darwin, ok := resources[0].Attributes["darwin"].(string); !ok || darwin != "darwin/config.cfg" {
+		t.Errorf("Expected darwin path to be 'darwin/config.cfg', got '%v'", resources[0].Attributes["darwin"])
+	}
+	
+	if windows, ok := resources[0].Attributes["windows"].(string); !ok || windows != "windows/config.cfg" {
+		t.Errorf("Expected windows path to be 'windows/config.cfg', got '%v'", resources[0].Attributes["windows"])
+	}
+}
